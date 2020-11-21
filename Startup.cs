@@ -12,14 +12,14 @@ namespace aswy
 {
     public class Startup
     {
-        // This method gets called by the runtime. Use this method to add services to the container.
+        // This method gets caller by the runtime. Use this method to add services to the container.
         // For more information on how to configure your application, visit https://go.microsoft.com/fwlink/?LinkID=398940
         public void ConfigureServices(IServiceCollection services)
         {
-            services.AddSingleton<DeltaListener>();
+            services.AddSingleton<DeltaListener.DeltaListener>();
         }
 
-        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        // This method gets caller by the runtime. Use this method to configure the HTTP request pipeline.
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
             if (env.IsDevelopment())
@@ -37,19 +37,16 @@ namespace aswy
 
             app.UseRouting();
 
-            app.UseMiddleware<WebbyTalky>();
+            app.UseMiddleware<DeltaListener.HotReloadInjectorMiddleware>();
 
 
-            app.UseEndpoints(endpoints =>
-            {
-                endpoints.MapGet("/hw", async context =>
-                {
-                    var d = context.RequestServices.GetRequiredService<DeltaListener>();
-                    d.Emote ("hw begin");
-                    await context.Response.WriteAsync("Hello World!");
-                    d.Emote ("hw end");
-                });
-            });
+            // app.UseEndpoints(endpoints =>
+            // {
+            //     endpoints.MapGet("/hw", async context =>
+            //     {
+            //         await context.Response.WriteAsync("Hello World!");
+            //     });
+            // });
         }
     }
 }
