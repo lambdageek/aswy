@@ -1,5 +1,6 @@
 
 var HotReloadInjector = (function () {
+    const HRI_REQUEST_PATH = "/hri";
     class HotReloadInjector {
         _loc;
         constructor(loc) {
@@ -17,7 +18,7 @@ var HotReloadInjector = (function () {
             let proto = loc.protocol === 'https:' ? "wss" : "ws";
             let port = loc.port ? (':' + loc.port) : '';
             let host = loc.hostname;
-            return proto + "://" + host + port + "/hri";
+            return proto + "://" + host + port + HRI_REQUEST_PATH;
         }
     }
 

@@ -9,13 +9,14 @@
 
             this.bingo = null;
             this.clicky = null;
+            this.clicks = 0;
             this.n = 0;
             this.base_ws = null;
         }
 
         onclick(_evt) {
-            this.bingo.innerText = `clicked ${++this.n} times`;
-            this.clicky.innerText = "click me again";
+            this.bingo.innerText = 'ping';
+            this.clicky.innerText = `clicked ${++this.clicks} times`;
             this.clicky.disabled = true;
             let hri = new HotReloadInjector(this.base_ws);
             hri.start_ws ({

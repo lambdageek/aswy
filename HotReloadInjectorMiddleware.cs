@@ -1,26 +1,27 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 
 
-namespace DeltaListener {
+namespace DeltaForwarder {
     public class HotReloadInjectorMiddleware {
+        const string HRI_REQUEST_PATH = "/hri";
         private readonly RequestDelegate next;
-        private readonly DeltaListener listener;
-        public HotReloadInjectorMiddleware (RequestDelegate next, DeltaListener listener) {
+        private readonly DeltaForwarder listener;
+        public HotReloadInjectorMiddleware (RequestDelegate next, DeltaForwarder listener) {
             this.next = next;
             this.listener = listener;
         }
 
         public async Task Invoke (HttpContext context) {
-            if (context.Request.Path == "/hri") {
+            if (context.Request.Path == HRI_REQUEST_PATH) {
                 if (context.WebSockets.IsWebSocketRequest) {
                     Console.WriteLine("websocket go brr");
                     using var websocket = await context.WebSockets.AcceptWebSocketAsync();
-                    var tcs = new TaskCompletionSource();
-                    listener.ConverseWith(websocket, tcs);
-                    await tcs.Task;
+                    /* N.B. important to await here to keep the websocket alive */
+                    await listener.ConverseWith(websocket, CancellationToken.None); /* FIXME: cancellation? */
                 } else {
                     Console.WriteLine ("you're not a websocket!");
                     context.Response.StatusCode = 418;
