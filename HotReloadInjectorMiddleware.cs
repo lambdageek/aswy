@@ -21,7 +21,7 @@ namespace DeltaForwarder {
                     Console.WriteLine("websocket go brr");
                     using var websocket = await context.WebSockets.AcceptWebSocketAsync();
                     /* N.B. important to await here to keep the websocket alive */
-                    await listener.ConverseWith(websocket, CancellationToken.None); /* FIXME: cancellation? */
+                    await listener.StartSession(websocket, context.RequestAborted);
                 } else {
                     Console.WriteLine ("you're not a websocket!");
                     context.Response.StatusCode = 418;

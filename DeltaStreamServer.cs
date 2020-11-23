@@ -55,6 +55,13 @@ namespace DeltaForwarder
                         await ListenForInjectorConnection (ct);
                         break;
                     case InjectorState.Connected:
+                        /* FIXME: So there problem here is that browser tabs exist.
+                         * So it's not enough to just have a single session with a single client.
+                         * We need to allow for multiple sessions to arise.
+                         * So at the very least this should be WaitForAllSessionsToEnd(),
+                         * and also before we get to this state and during it, we should be
+                         * able to deal with additional calls to GetDeltaSource
+                         */ 
                         await WaitForSessionEnd (ct);
                         break;
                 }
@@ -80,8 +87,8 @@ namespace DeltaForwarder
         private async Task WaitForSessionEnd (CancellationToken ct = default)
         {
             await _readerFinished.WaitAsync (ct);
-            // or could be _state = InjectorState.Listening if we want to go again
-            // would need to reset _injectorReady too
+            // or could stay in the connected state until the underlying injector connection closes
+            // in case new clients connect.
             _state = InjectorState.Disconnected;
         }
 
@@ -122,6 +129,11 @@ namespace DeltaForwarder
                                              readyWhenCancelled.Task.ContinueWith((_t) => WaitForInjectorOutcome.Canceled));
             switch (outcome.Result) {
                 case WaitForInjectorOutcome.Ready:
+                    // FIXME: this isn't quite right if there's more than one client
+                    // - we end up giving the same stream to every client.
+                    // If the connection is just for reading, they end up taking consecutive payloads
+                    // If the connection is also for writing (client might want to say where it's starting from, for example)
+                    // they end up talking over each other.
                     return new Source (injectorReadyTask.Result, _readerFinished);
                 case WaitForInjectorOutcome.Canceled:
                     ct.ThrowIfCancellationRequested ();
