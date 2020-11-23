@@ -28,7 +28,7 @@ namespace DeltaForwarder {
             _server = server;
         }
 
-        public Task ConverseWith(WebSocket socket, CancellationToken ct = default)
+        public Task StartSession(WebSocket socket, CancellationToken ct = default)
         {
             TaskCompletionSource doner = new TaskCompletionSource();
             Task.Run (() => ServiceClient (socket, doner, ct), ct);
