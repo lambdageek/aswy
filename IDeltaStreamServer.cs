@@ -5,19 +5,25 @@ using System.Threading.Tasks;
 namespace DeltaForwarder
 {
     public enum DeltaServerState {
-            /* Server is not ready, IDeltaStreamServer.GetDeltaSource may return a task that isn't completed */
+            /* Server is not ready, IDeltaStreamServer.GetDefaultSession may return a task that isn't completed */
             NotReady,
-            /* Server is ready, IDeltaStreamServer.GetDeltaSource will return a completed Task */
+            /* Server is ready, IDeltaStreamServer.GetDefaultSession may return a completed Task */
             Connected,
-            /* Server will not return any more delta sources */
+            /* Server will not return any more delta sources, GetDefaultSession is not usable */
             Disconnected
     }
 
     public interface IDeltaStreamServer {
 
         DeltaServerState PeekState {get; }
-        Task<IDeltaSource> GetDeltaSource (CancellationToken ct = default);
+        Task<IDeltaBackendSession> GetDefaultSession (CancellationToken ct = default);
 
+    }
+
+    public interface IDeltaBackendSession {
+        // TODO: we might want to pass in some argument to identify how far into the delta
+        // stream this client is going to start.
+        Task<IDeltaSource> GetDeltaSource (CancellationToken ct = default);
     }
 
     public interface IDeltaSource {

@@ -4,67 +4,143 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace DeltaForwarder
 {
+
+    internal class DeltaBackendSessionClosedException : Exception {
+        public DeltaBackendSessionClosedException() : base () {}
+        public DeltaBackendSessionClosedException(string message) : base (message) {}
+
+        public DeltaBackendSessionClosedException(string message, Exception innerException) : base (message, innerException) {}
+    }
+
+    /// Represents a single backend connection that is feeding us changes.
+    internal class DeltaBackendSession : IDeltaBackendSession {
+
+        struct ReaderCount {
+            bool started;
+            int n;
+            object _lock;
+            internal ReaderCount (int n) {
+                this.n = n;
+                this.started = false;
+                _lock = new object();
+            }
+
+            public bool TryIncr () {
+                lock (_lock) {
+                    if (n == 0 && started)
+                        return false;
+                    else { 
+                        started = true;
+                        ++n;
+                        return true;
+                    }
+                }
+            }
+
+            public bool Decr () {
+                lock (_lock) {
+                    if (n == 0)
+                        return false;
+                    return (--n == 0);
+                }
+            }
+        }
+
+        readonly ReaderCount _readers;
+        readonly TaskCompletionSource _readersFinished;
+        readonly Stream _serverStream;
+        readonly CancellationTokenSource _serverClosed;
+        readonly ILogger _log;       
+        internal DeltaBackendSession (Stream serverStream, ILogger log) {
+            _readers = new ReaderCount(0);
+            _readersFinished = new TaskCompletionSource();
+            _serverStream = serverStream;
+            _log = log;
+            _serverClosed = new CancellationTokenSource ();
+        }
+
+        private async Task WaitForSessionEnd (CancellationToken ct = default)
+        {
+            // FIXME: is this what we want? or do we want to wait until the backend is closed?
+            await _readersFinished.Task;
+        }
+
+
+        internal void Start () {
+            var _t = Task.Run (() => ServiceSession ());
+        }
+
+        internal async Task ServiceSession () {
+            await WaitForSessionEnd (_serverClosed.Token); // FIXME: cancel when the stream closes            
+        }
+
+        internal void DisconnectServer ()
+        {
+            _serverStream.Close();
+            _serverClosed.Cancel();
+        }
+        internal Task NotifySecondaryAndClose () {
+            return Task.Run (() => DisconnectServer());
+        }
+
+        private void ReaderDone () {
+            if (_readers.Decr())
+                _readersFinished.SetResult();
+        }
+        public Task<IDeltaSource> GetDeltaSource(CancellationToken ct = default)
+        {
+            if (!_readers.TryIncr())
+                return Task.FromException<IDeltaSource>(new DeltaBackendSessionClosedException());
+            var src = new DeltaStreamServer.Source (_serverStream, ReaderDone, _log);
+            return Task.FromResult(src as IDeltaSource);
+        }
+    }
+
+    /// Subclasses are responsible for creating a DeltaBackendSession,
+    /// for example by listening on a socket. (The accepted connection will then be managed by)
+    /// the DeltaBackendSession
     public abstract class DeltaStreamServer : IDeltaStreamServer {
-        
 
         enum InjectorState {
             Starting,
             Listening,
-            Connected,
             Disconnected
         }
         private InjectorState _state;
-        readonly TaskCompletionSource<Stream> _injectorReady;
+        readonly TaskCompletionSource<DeltaBackendSession> _defaultSessionReady;
+        readonly ILogger _log;
+         
 
-        readonly SemaphoreSlim _readerFinished;        
-
-        protected DeltaStreamServer () {
+        protected DeltaStreamServer (ILogger<DeltaStreamServer> log) {
             _state = InjectorState.Starting;
-            _injectorReady = new TaskCompletionSource<Stream>();
-            _readerFinished = new SemaphoreSlim (0, 1);
+            _defaultSessionReady = new TaskCompletionSource<DeltaBackendSession>();
+            _log = log;
+
             StartListening ();
 
         }
 
-
         public DeltaServerState PeekState => _state switch {
             InjectorState.Starting => DeltaServerState.NotReady,
-            InjectorState.Listening => DeltaServerState.NotReady,
-            InjectorState.Connected => DeltaServerState.Connected,
+            InjectorState.Listening => DeltaServerState.Connected,
             InjectorState.Disconnected => DeltaServerState.Disconnected,
             _ => throw new Exception ($"unexpected injector state {_state}")
         };
         private void StartListening (CancellationToken ct = default) {
-            Task.Run (() => InjectorListenerLoop (ct));
+            Task.Run (() => InjectorListenerLoop (ct), ct);
         }
 
         private async Task InjectorListenerLoop (CancellationToken ct = default) {
+            _state = InjectorState.Starting;
+            await CreateIncomingConnectionListener (ct);
             while (_state != InjectorState.Disconnected) {
                 if (ct.IsCancellationRequested)
                     _state = InjectorState.Disconnected;
-                switch (_state) {
-                    case InjectorState.Disconnected:
-                        break;
-                    case InjectorState.Starting:
-                        await CreateIncomingConnectionListener (ct);
-                        break;
-                    case InjectorState.Listening:
-                        await ListenForInjectorConnection (ct);
-                        break;
-                    case InjectorState.Connected:
-                        /* FIXME: So there problem here is that browser tabs exist.
-                         * So it's not enough to just have a single session with a single client.
-                         * We need to allow for multiple sessions to arise.
-                         * So at the very least this should be WaitForAllSessionsToEnd(),
-                         * and also before we get to this state and during it, we should be
-                         * able to deal with additional calls to GetDeltaSource
-                         */ 
-                        await WaitForSessionEnd (ct);
-                        break;
-                }
+                await ListenForInjectorConnection (ct);
             }
         }
 
@@ -79,35 +155,40 @@ namespace DeltaForwarder
 
         protected async Task ListenForInjectorConnection (CancellationToken ct = default)
         {
-            var stream = await OnListenForInjectorConnection(ct);
-            _state = InjectorState.Connected;
-            _injectorReady.SetResult(stream);
+            try {
+                var stream = await OnListenForInjectorConnection(ct);
+                var defaultSession = new DeltaBackendSession (stream, _log);
+                if (!_defaultSessionReady.Task.IsCompleted) {
+                    _defaultSessionReady.SetResult(defaultSession);
+                    defaultSession.Start ();
+                } else {
+                    // TODO: save the new session
+                    var secondarySession = new DeltaBackendSession (stream, _log);
+                    var _t = secondarySession.NotifySecondaryAndClose();
+                }
+            } catch (TaskCanceledException) {
+                // just return and let the InjectorListenerLoop handle the cancellation
+            }
         }
-
-        private async Task WaitForSessionEnd (CancellationToken ct = default)
-        {
-            await _readerFinished.WaitAsync (ct);
-            // or could stay in the connected state until the underlying injector connection closes
-            // in case new clients connect.
-            _state = InjectorState.Disconnected;
-        }
-
-        class Source : IDeltaSource {
+        
+        internal class Source : IDeltaSource {
             readonly Stream stream;
-            readonly SemaphoreSlim finished;
+            readonly Action finished;
+            readonly ILogger _log;
 
-            internal Source (Stream stream, SemaphoreSlim finished) {
+            internal Source (Stream stream, Action finished, ILogger log) {
                 this.stream = stream;
                 this.finished = finished;
+                this._log = log;
             }
 
             public IAsyncEnumerable<DeltaPayload> GetPayloads(CancellationToken ct = default)
             {
-                return WebSocketFramedSender.EnumerateStreamFrames (stream, ct);
+                return WebSocketFramedSender.EnumerateStreamFrames (stream, _log, ct);
             }
 
             public Task ClientDone () {
-                finished.Release ();
+                finished ();
                 return Task.CompletedTask;
             }
         }
@@ -117,14 +198,14 @@ namespace DeltaForwarder
             Canceled
         }
 
-        public async Task<IDeltaSource> GetDeltaSource (CancellationToken ct = default)
+        public async Task<IDeltaBackendSession> GetDefaultSession (CancellationToken ct = default)
         {
             var readyWhenCancelled = new TaskCompletionSource();
             if (ct != CancellationToken.None)
                 ct.Register( (tcs) => {
                     ((TaskCompletionSource)tcs!).TrySetResult();
                 }, readyWhenCancelled);
-            var injectorReadyTask = _injectorReady.Task;
+            var injectorReadyTask = _defaultSessionReady.Task;
             var outcome = await Task.WhenAny(injectorReadyTask.ContinueWith((_t) => WaitForInjectorOutcome.Ready),
                                              readyWhenCancelled.Task.ContinueWith((_t) => WaitForInjectorOutcome.Canceled));
             switch (outcome.Result) {
@@ -134,7 +215,7 @@ namespace DeltaForwarder
                     // If the connection is just for reading, they end up taking consecutive payloads
                     // If the connection is also for writing (client might want to say where it's starting from, for example)
                     // they end up talking over each other.
-                    return new Source (injectorReadyTask.Result, _readerFinished);
+                    return injectorReadyTask.Result;
                 case WaitForInjectorOutcome.Canceled:
                     ct.ThrowIfCancellationRequested ();
                     break;
@@ -147,19 +228,36 @@ namespace DeltaForwarder
     }
 
     public class NoneDeltaStreamServer : DeltaStreamServer {
-        public NoneDeltaStreamServer () {
-
+        readonly ILogger _log;
+        bool created;
+        public NoneDeltaStreamServer (ILogger<NoneDeltaStreamServer> log) : base (log) {
+            _log = log;
+            created = false;
         }
 
         protected override Task OnCreateIncomingConnectionListener(CancellationToken ct = default)
         {
-            return Task.Delay (1000, ct);
+            return Task.CompletedTask;
         }
 
-        protected override async Task<Stream> OnListenForInjectorConnection (CancellationToken ct = default)
+        protected override Task<Stream> OnListenForInjectorConnection (CancellationToken ct = default)
         {
-            await Task.Delay (1000, ct);
-            return new MemoryStream();
+            if (created) {
+                var tcs = new TaskCompletionSource<Stream>();
+                return tcs.Task; // return a Task that never completes
+            }
+
+            var s = "Hello World!";
+            var enc = System.Text.Encoding.UTF8;
+            const int lenCount = 4;
+            var count = enc.GetByteCount(s);
+            var buf = new byte[lenCount + count];
+            BitConverter.TryWriteBytes(new Span<byte>(buf, 0, lenCount), System.Net.IPAddress.HostToNetworkOrder(count));
+            enc.GetBytes(s, new Span<byte>(buf, lenCount, buf.Length - lenCount));
+            _log.LogTrace("creating memory stream");
+            var t =  Task.FromResult<Stream>(new MemoryStream(buf));
+            created = true;
+            return t;
         }
 
 
