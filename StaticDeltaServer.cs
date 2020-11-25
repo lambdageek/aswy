@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,7 +25,7 @@ namespace DeltaForwarder {
             served = false;
         }
         protected override Task OnCreateIncomingConnectionListener (CancellationToken ct = default) {
-            foreach (var filePath in Directory.GetFiles (basePath, "*.dmeta")) {
+            foreach (var filePath in Directory.GetFiles (basePath, "*.name")) {
                 var noExt = Path.GetFileNameWithoutExtension (filePath);
                 var dil = Path.Combine (basePath, noExt + ".dil");
                 if (File.Exists(dil))
@@ -32,6 +33,45 @@ namespace DeltaForwarder {
             }
             log.LogInformation ($"Will serve: {String.Join(", ", usableContent)}");
             return Task.CompletedTask;
+        }
+
+        private static bool WriteNet32 (int n, byte[] buf, ref int pos) {
+            const int lenCount = 4;
+            var res = BitConverter.TryWriteBytes(new Span<byte>(buf, pos, lenCount), System.Net.IPAddress.HostToNetworkOrder(n));
+            pos += lenCount;
+            return res;
+        }
+
+        private static async Task<int> WriteAllFromStream (Stream f, byte[] buf, int bytesRemaining, int pos, CancellationToken ct = default) {
+            while (bytesRemaining > 0) {
+                int nread = await f.ReadAsync (new Memory<byte>(buf, pos, bytesRemaining), ct);
+                pos += nread;
+                bytesRemaining -= nread;
+            }
+            return pos;
+        }
+        private static async Task<DeltaPayload> MakePayloadFromPath (string basePath,string noExt, CancellationToken ct = default) {
+            var paths = new string[] {
+                Path.Combine(basePath, noExt + ".name"),
+                Path.Combine(basePath, noExt + ".dmeta"),
+                Path.Combine(basePath, noExt + ".dil")
+            };
+            // Payload is    [ totalSize | dmetaSize | dmeta | dilSize | dil ]
+            // where the sizes are int32 in network order and don't count themselves
+            var sizes = paths.Select((f) => (int)new FileInfo (f).Length);
+            const int lenCount = 4;
+            var totalSize = sizes.Sum () + sizes.Count() * lenCount;
+            
+            var buf = new byte[lenCount + totalSize];
+            int pos = 0;
+
+            WriteNet32 (totalSize, buf, ref pos);
+            foreach ((var path, var size) in paths.Zip(sizes)) {
+                WriteNet32 (size, buf, ref pos);
+                using var f = new FileStream (path, FileMode.Open);
+                pos = await WriteAllFromStream (f, buf, size, pos, ct);
+            }
+            return new DeltaPayload(buf);
         }
         private protected override Task<DeltaBackendSession> OnListenForInjectorConnection (CancellationToken ct = default) {
             if (served)
@@ -43,20 +83,7 @@ namespace DeltaForwarder {
                 int curPayload = 0;
                 foreach (var noExt in usableContent) {
                     ct.ThrowIfCancellationRequested();
-                    var dmetaPath = Path.Combine(basePath, noExt + ".dmeta");
-                    using var f = new FileStream (dmetaPath, FileMode.Open);
-                    int fileSz = (int)f.Length; // could be longer
-                    const int lenCount = 4;
-                    var buf = new byte[fileSz + lenCount];
-                    BitConverter.TryWriteBytes(new Span<byte>(buf, 0, lenCount), System.Net.IPAddress.HostToNetworkOrder(fileSz));
-                    int bytesRemaining = fileSz;
-                    int pos = lenCount;
-                    while (bytesRemaining > 0) {
-                        int nread = await f.ReadAsync (new Memory<byte>(buf, pos, bytesRemaining), ct);
-                        pos += nread;
-                        bytesRemaining -= nread;
-                    }
-                    payloads[curPayload++] = new DeltaPayload(buf);
+                    payloads[curPayload++] = await MakePayloadFromPath (basePath, noExt, ct);
                 };
                 return new FixedPayloadsDeltaBackendSession (payloads, log) as DeltaBackendSession;
             }, ct);

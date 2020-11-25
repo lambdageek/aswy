@@ -10,16 +10,37 @@ var HotReloadInjector = (function () {
         return proto + "://" + host + port + HRI_REQUEST_PATH;
     }
 
-    /// An HRIPayload is an object with 
+    /// An HRIPayload is an object with a dmeta and a dil property
+    ///
+    /// On the wire the payload is [ totalSize | nameSize | name | dmetaSize | dmeta | dilSize | dil ]
+    /// where the sizes are int32 in network order and don't count themselves
     function HRIPayload() {
     }
     HRIPayload.fromBuffer = (buf) => {
         let decoder = new TextDecoder ();
         let data = new DataView (buf);
-        let len = data.getInt32(0, false);
-        let bufView = new DataView(buf, 4, len);
+        
+        let pos = 4; // skip over total length
+        
+        let nameLen = data.getInt32 (pos, false);
+        pos += 4;
+        bufView = new DataView(buf, pos, nameLen);
+        let name = decoder.decode (bufView);
+        pos += nameLen;
+
+        let dmetaLen = data.getInt32(pos, false);
+        pos += 4;
+        bufView = new DataView(buf, pos, dmetaLen);
         let dmeta = decoder.decode (bufView);
-        return { dmeta: dmeta, dil: "" };
+        pos += dmetaLen;
+
+        let dilLen = data.getInt32 (pos, false);
+        pos += 4;
+        bufView = new DataView (buf, pos, dilLen);
+        let dil = decoder.decode (bufView);
+        pos += dilLen;
+
+        return { name: name, dmeta: dmeta, dil: dil };
     }
 
 
@@ -69,7 +90,7 @@ var HotReloadInjector = (function () {
             console.log ("got a payload, decoding...")
             evt.data.arrayBuffer().then (buf => {
                 let payload = HRIPayload.fromBuffer (buf);
-                console.log (`decoded payload as ${payload.dmeta}`);
+                console.log ('decoded payload as ', payload);
                 let evt2 = new MessageEvent(evt.type, { ...evt,  data : payload});
                 if (onmessage)
                     onmessage (evt2);
