@@ -25,7 +25,7 @@
                     this.clicky.disabled = false;
                     this.bingo.innerText += " and connection closed"
                 },
-                onmessage: (evt) => { this.bingo.innerText = `got ${++this.n}: ${evt.data}`}
+                onmessage: (evt) => { this.bingo.innerText = `got ${++this.n}: ${evt.data.dmeta}`}
             });
         }
 

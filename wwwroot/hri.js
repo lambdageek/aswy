@@ -1,6 +1,19 @@
 
 var HotReloadInjector = (function () {
     const HRI_REQUEST_PATH = "/hri";
+
+    function HRIPayload() {
+    }
+    HRIPayload.fromBuffer = (buf) => {
+        let decoder = new TextDecoder ();
+        let data = new DataView (buf);
+        let len = data.getInt32(0, false);
+        let bufView = new DataView(buf, 4, len);
+        let dmeta = decoder.decode (bufView);
+        return { dmeta: dmeta, dil: "" };
+    }
+
+
     class HotReloadInjector {
         _loc;
         _decoder;
@@ -24,10 +37,9 @@ var HotReloadInjector = (function () {
         #onmessage (onmessage, evt) {
             console.log ("got a payload, decoding...")
             evt.data.arrayBuffer().then (buf => {
-                let bufView = new Uint8Array(buf, 4); // skip length
-                let data2 = this._decoder.decode (bufView);
-                console.log (`decoded payload as ${data2}`);
-                let evt2 = new MessageEvent(evt.type, { ...evt,  data : data2});
+                let payload = HRIPayload.fromBuffer (buf);
+                console.log (`decoded payload as ${payload.dmeta}`);
+                let evt2 = new MessageEvent(evt.type, { ...evt,  data : payload});
                 onmessage (evt2);
             });
 

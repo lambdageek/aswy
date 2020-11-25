@@ -22,7 +22,7 @@ namespace DeltaForwarder
         struct ReaderCount {
             bool started;
             int n;
-            object _lock;
+            readonly object _lock;
             internal ReaderCount (int n) {
                 this.n = n;
                 this.started = false;
@@ -66,7 +66,7 @@ namespace DeltaForwarder
         private async Task WaitForSessionEnd (CancellationToken ct = default)
         {
             // FIXME: is this what we want? or do we want to wait until the backend is closed?
-            await _readersFinished.Task;
+            await Util.Abandon.Await (_readersFinished.Task, ct);
         }
 
 
@@ -193,35 +193,15 @@ namespace DeltaForwarder
             }
         }
 
-        private enum WaitForInjectorOutcome {
-            Ready,
-            Canceled
-        }
 
         public async Task<IDeltaBackendSession> GetDefaultSession (CancellationToken ct = default)
         {
-            var readyWhenCancelled = new TaskCompletionSource();
-            if (ct != CancellationToken.None)
-                ct.Register( (tcs) => {
-                    ((TaskCompletionSource)tcs!).TrySetResult();
-                }, readyWhenCancelled);
-            var injectorReadyTask = _defaultSessionReady.Task;
-            var outcome = await Task.WhenAny(injectorReadyTask.ContinueWith((_t) => WaitForInjectorOutcome.Ready),
-                                             readyWhenCancelled.Task.ContinueWith((_t) => WaitForInjectorOutcome.Canceled));
-            switch (outcome.Result) {
-                case WaitForInjectorOutcome.Ready:
-                    // FIXME: this isn't quite right if there's more than one client
-                    // - we end up giving the same stream to every client.
-                    // If the connection is just for reading, they end up taking consecutive payloads
-                    // If the connection is also for writing (client might want to say where it's starting from, for example)
-                    // they end up talking over each other.
-                    return injectorReadyTask.Result;
-                case WaitForInjectorOutcome.Canceled:
-                    ct.ThrowIfCancellationRequested ();
-                    break;
-            }
-            throw new Exception ("should not be possible");
-
+            // FIXME: this isn't quite right if there's more than one client
+            // - we end up giving the same stream to every client.
+            // If the connection is just for reading, they end up taking consecutive payloads
+            // If the connection is also for writing (client might want to say where it's starting from, for example)
+            // they end up talking over each other.
+            return await Util.Abandon.Await(_defaultSessionReady.Task, ct);
         }
 
 
