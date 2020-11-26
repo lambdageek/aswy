@@ -10,7 +10,7 @@ var HotReloadInjector = (function () {
         return proto + "://" + host + port + HRI_REQUEST_PATH;
     }
 
-    /// An HRIPayload is an object with a dmeta and a dil property
+    /// An HRIPayload is an object with a name, a dmeta and a dil property
     ///
     /// On the wire the payload is [ totalSize | nameSize | name | dmetaSize | dmeta | dilSize | dil ]
     /// where the sizes are int32 in network order and don't count themselves
@@ -31,18 +31,22 @@ var HotReloadInjector = (function () {
         let dmetaLen = data.getInt32(pos, false);
         pos += 4;
         bufView = new DataView(buf, pos, dmetaLen);
-        let dmeta = decoder.decode (bufView);
+        let dmeta = new Uint8Array (buf, pos, dmetaLen);
         pos += dmetaLen;
 
         let dilLen = data.getInt32 (pos, false);
         pos += 4;
-        bufView = new DataView (buf, pos, dilLen);
-        let dil = decoder.decode (bufView);
+        let dil = new Uint8Array (buf, pos, dilLen);
         pos += dilLen;
 
         return { name: name, dmeta: dmeta, dil: dil };
     }
-
+    HRIPayload.toMarshaled = (payload) => {
+        // convert the byte arrays to base64 strings
+        let dmeta = window.btoa (String.fromCharCode(... payload.dmeta));
+        let dil = window.btoa (String.fromCharCode (... payload.dil));
+        return { name: payload.name, dmeta: dmeta, dil: dil};
+    }
 
     class HotReloadInjector {
         _ws;
@@ -91,14 +95,14 @@ var HotReloadInjector = (function () {
             evt.data.arrayBuffer().then (buf => {
                 let payload = HRIPayload.fromBuffer (buf);
                 console.log ('decoded payload as ', payload);
-                let evt2 = new MessageEvent(evt.type, { ...evt,  data : payload});
+                let mp = HRIPayload.toMarshaled (payload);
+                console.log ('encoded as ', mp);
+                let evt2 = new MessageEvent(evt.type, { ...evt,  data : mp});
                 if (onmessage)
                     onmessage (evt2);
             });
 
         }
-
-        
 
         static create(options) {
             let start = true;
@@ -145,11 +149,19 @@ var HotReloadInjector = (function () {
         textarea.innerText = "hot reload injector\n";
         box.appendChild (textarea);
 
+        let applyUpdate = (typeof BINDING !== 'undefined');
+
         button.addEventListener('click', () => {
             button.disabled = true;
             let callbacks = {
                 onmessage: (evt) => {
-                    textarea.appendChild(document.createTextNode("payload is " + evt.data.dmeta + "\n"));
+                    let payload = evt.data;
+                    textarea.appendChild(document.createTextNode("payload for " + payload.name + "\n"));
+                    if (applyUpdate) {
+                        console.log ("applying update", payload);
+                        BINDING.call_static_method("[DeltaHelper] MonoDelta.DeltaHelper:InjectUpdate", [payload.name, payload.dmeta, payload.dil]);
+                        console.log ("update applied");
+                    }
                 },
             };
             HotReloadInjector.create ({callbacks: callbacks});
@@ -158,6 +170,6 @@ var HotReloadInjector = (function () {
         body.appendChild (box);        
     }
 
-    document.addEventListener ('DOMContentLoaded', () => { console.log ("injecting"); hriHtml (); });
+    document.addEventListener ('DOMContentLoaded', () => { hriHtml (); });
     return HotReloadInjector;
 })();

@@ -1,10 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using DeltaForwarder.Extensions;
@@ -32,15 +28,26 @@ namespace aswy
             app.UseWebSockets();
 
             {
+                var ctp =  new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider ();
+                const string octetStream = "application/octet-stream";
+                /* need these ones for Mono wasm */
+                ctp.Mappings[".dll"] = octetStream;
+                ctp.Mappings[".blat"] = octetStream;
+                ctp.Mappings[".dat"] = octetStream;
+                /* FIXME: these three are not needed but the sample bundles some */
+                ctp.Mappings[".dmeta"] = octetStream;
+                ctp.Mappings[".dil"] = octetStream;
+                ctp.Mappings[".dpdb"] = octetStream;
                 var fs = new FileServerOptions();
                 fs.DefaultFilesOptions.DefaultFileNames = new string[] {"index.html"};
+                fs.EnableDirectoryBrowsing = true;
+                fs.StaticFileOptions.ContentTypeProvider = ctp;
                 app.UseFileServer(fs);
             }
 
             app.UseRouting();
 
             app.UseHotReloadInjector();
-
 
             // app.UseEndpoints(endpoints =>
             // {

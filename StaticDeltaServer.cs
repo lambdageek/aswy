@@ -24,6 +24,16 @@ namespace DeltaForwarder {
             this.log = log;
             served = false;
         }
+
+        private static int CompareNumExt(string x, string y ) {
+            string extX = Path.GetExtension(x)[1..];
+            string extY = Path.GetExtension(y)[1..];
+            if (Int32.TryParse(extX, out int nx) && Int32.TryParse(extY, out int ny)) {
+                return nx < ny  ? -1 : nx == ny ? 0 : 1;
+            } else {
+                return string.Compare (x, y);
+            }
+        }
         protected override Task OnCreateIncomingConnectionListener (CancellationToken ct = default) {
             foreach (var filePath in Directory.GetFiles (basePath, "*.name")) {
                 var noExt = Path.GetFileNameWithoutExtension (filePath);
@@ -31,6 +41,7 @@ namespace DeltaForwarder {
                 if (File.Exists(dil))
                     usableContent.Add (noExt);
             }
+            usableContent.Sort(CompareNumExt);
             log.LogInformation ($"Will serve: {String.Join(", ", usableContent)}");
             return Task.CompletedTask;
         }
@@ -115,7 +126,7 @@ namespace DeltaForwarder {
                 foreach (var p in payloads) {
                     if (ct.IsCancellationRequested)
                         yield break;
-                    await Task.Delay (0, CancellationToken.None);
+                    await Task.Delay (1000, CancellationToken.None); /* wait long enough for things to be noticeable */
                     yield return p;
                 }
             }
